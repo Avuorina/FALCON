@@ -9,24 +9,34 @@ AREA_CODES_PATH = os.path.join(os.path.dirname(__file__), "area_codes.json")
 DEFAULT_LOCATION = "瀬戸"
 
 
+def _load_area_data() -> dict:
+    """area_codes.json を読み込む"""
+    with open(AREA_CODES_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def get_area_code(location_name: str) -> str | None:
     """
     地名から気象庁の地域コードを検索する
     完全一致 → 部分一致の順で探す。見つからなければNoneを返す
     """
-    with open(AREA_CODES_PATH, "r", encoding="utf-8") as f:
-        area_data = json.load(f)
+    aliases = _load_area_data()["aliases"]
 
     # 完全一致でまず探す
-    if location_name in area_data:
-        return area_data[location_name]
+    if location_name in aliases:
+        return aliases[location_name]
 
     # 部分一致で探す(「名古屋市」→「名古屋」でヒットさせる)
-    for key in area_data:
+    for key in aliases:
         if key in location_name or location_name in key:
-            return area_data[key]
+            return aliases[key]
 
     return None
+
+
+def get_pref_name(area_code: str) -> str:
+    """地域コードから都道府県名を引く。未登録なら空文字を返す"""
+    return _load_area_data()["areas"].get(area_code, "")
 
 
 def get_weather(location: str = None, lat: float = None, lon: float = None) -> dict:
@@ -41,7 +51,9 @@ def get_weather(location: str = None, lat: float = None, lon: float = None) -> d
 
     area_code = get_area_code(target_location)
     if area_code is None:
-        return {"error": f"「{target_location}」の地域コードが見つかりませんでした。area_codes.jsonに追加してください。"}
+        return {"error": f"「{target_location}」の地域コードが見つかりませんでした。area_codes.jsonのaliasesに追加してください。"}
+
+    pref_name = get_pref_name(area_code)
 
     url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
 
@@ -66,8 +78,12 @@ def get_weather(location: str = None, lat: float = None, lon: float = None) -> d
     for date, weather in zip(dates, weather_codes):
         forecast.append({"date": date, "weather": weather})
 
+    # 気象庁が返すのは「西部」のような県内区分だけなので、県名を前に付けて曖昧さをなくす
+    # 県名が未登録(空文字)なら、区分名だけで返す
+    full_name = f"{pref_name}{area_name}" if pref_name else area_name
+
     return {
-        "location": area_name,
+        "location": full_name,
         "forecast": forecast
     }
 
