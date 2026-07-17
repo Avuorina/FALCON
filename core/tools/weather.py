@@ -15,9 +15,9 @@ def _load_area_data() -> dict:
         return json.load(f)
 
 
-def get_area_code(location_name: str) -> str | None:
+def resolve_location(location_name: str) -> dict | None:
     """
-    地名から気象庁の地域コードを検索する
+    地名から {"file": 予報ファイルのコード, "area": 県内の区分コード} を引く
     完全一致 → 部分一致の順で探す。見つからなければNoneを返す
     """
     aliases = _load_area_data()["aliases"]
@@ -34,9 +34,9 @@ def get_area_code(location_name: str) -> str | None:
     return None
 
 
-def get_pref_name(area_code: str) -> str:
-    """地域コードから都道府県名を引く。未登録なら空文字を返す"""
-    return _load_area_data()["areas"].get(area_code, "")
+def get_pref_name(file_code: str) -> str:
+    """予報ファイルのコードから都道府県名を引く。未登録なら空文字を返す"""
+    return _load_area_data()["areas"].get(file_code, "")
 
 
 def get_weather(location: str = None, lat: float = None, lon: float = None) -> dict:
@@ -49,13 +49,15 @@ def get_weather(location: str = None, lat: float = None, lon: float = None) -> d
     # 現時点ではlocationが無ければデフォルト地域を使う
     target_location = location if location else DEFAULT_LOCATION
 
-    area_code = get_area_code(target_location)
-    if area_code is None:
+    target = resolve_location(target_location)
+    if target is None:
         return {"error": f"「{target_location}」の地域コードが見つかりませんでした。area_codes.jsonのaliasesに追加してください。"}
 
-    pref_name = get_pref_name(area_code)
+    file_code = target["file"]   # 予報ファイル(府県予報区)のコード 例: 230000
+    area_code = target["area"]   # 県内の区分(一次細分区域)のコード 例: 230010
+    pref_name = get_pref_name(file_code)
 
-    url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json"
+    url = f"https://www.jma.go.jp/bosai/forecast/data/forecast/{file_code}.json"
 
     try:
         response = requests.get(url, timeout=10)
@@ -68,9 +70,23 @@ def get_weather(location: str = None, lat: float = None, lon: float = None) -> d
     try:
         # data[0]が短期予報(今日・明日・明後日)のブロック
         time_series = data[0]["timeSeries"][0]
-        area_name = time_series["areas"][0]["area"]["name"]
-        weather_codes = time_series["areas"][0]["weathers"]  # 天気の説明文リスト
         dates = time_series["timeDefines"]  # 対応する日付リスト
+
+        # ★区分コードで該当エリアを探す★
+        # 気象庁のareasの並び順は当てにできない(静岡は 中部→西部→東部→伊豆 でコード順ですらない)
+        target_area = None
+        for a in time_series["areas"]:
+            if a["area"]["code"] == area_code:
+                target_area = a
+                break
+
+        # 見つからなければエラーにする。areas[0]にフォールバックしないこと。
+        # 「別の場所の天気を、正しい顔で返す」のが最悪の失敗だから、黙って代替しない
+        if target_area is None:
+            return {"error": f"区分コード {area_code} が {file_code} の予報データ内に見つかりませんでした。area_codes.jsonを確認してください。"}
+
+        area_name = target_area["area"]["name"]
+        weather_codes = target_area["weathers"]  # 天気の説明文リスト
     except (KeyError, IndexError) as e:
         return {"error": f"天気データの解析に失敗しました: {e}"}
 
@@ -90,5 +106,8 @@ def get_weather(location: str = None, lat: float = None, lon: float = None) -> d
 
 # テスト実行(このファイルを直接実行した時だけ動く)
 if __name__ == "__main__":
-    result = get_weather("名古屋")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    # 西部/東部が別々に取れているか確認するため、複数地点を叩く
+    for name in ["名古屋", "豊橋", "浜松", "熱海"]:
+        result = get_weather(name)
+        print(f"--- {name} ---")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
