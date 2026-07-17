@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from claude_agent_sdk import (
-    query,
+    ClaudeSDKClient,          # ← query から差し替え。セッションを保持する方の入り口
     ClaudeAgentOptions,
     ResultMessage,
     tool,
@@ -53,30 +53,48 @@ falcon_tools = create_sdk_mcp_server(
     tools=[weather_tool, save_memo_tool],
 )
 
+# ここがポイント: 設定を「関数の外」に出してモジュール定数にした。
+# 今まで _ask_claude_async の中で毎回作ってたが、
+# main.py 側がクライアントを作る側になるので、設定を渡せる場所に置く必要がある。
+FALCON_OPTIONS = ClaudeAgentOptions(
+    model="claude-sonnet-5",
+    system_prompt=SYSTEM_PROMPT,
+    mcp_servers={"falcon": falcon_tools},
+    allowed_tools=[
+        "mcp__falcon__get_weather",
+        "mcp__falcon__save_memo",
+    ],
+    setting_sources=[],
+)
 
-async def _ask_claude_async(user_message: str) -> str:
-    options = ClaudeAgentOptions(
-        model="claude-sonnet-5",
-        system_prompt=SYSTEM_PROMPT,
-        mcp_servers={"falcon": falcon_tools},
-        allowed_tools=[
-            "mcp__falcon__get_weather",
-            "mcp__falcon__save_memo",
-        ],
-        setting_sources=[],
-    )
+
+async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
+    """接続済みクライアントに1ターン投げて、答えを受け取る。
+
+    client を「引数でもらう」のが今回の肝。自分で作らない = 自分で壊さない。
+    同じ client を使い回す限り、向こうは会話の流れを覚えてる。
+    """
+    # query() で発言を送る。await が要るのは、送信完了を待つ非同期処理だから
+    await client.query(user_message)
 
     answer = ""
-    async for message in query(prompt=user_message, options=options):
+    # receive_response() は、この発言に対する応答メッセージを
+    # ResultMessage(打ち止めの合図)まで順に流してくれる非同期イテレータだ。
+    # 途中に tool 呼び出しのメッセージも混ざって流れてくる。
+    async for message in client.receive_response():
         if isinstance(message, ResultMessage) and message.result:
             answer = message.result
     return answer
 
 
-def ask_claude(user_message: str) -> str:
-    return asyncio.run(_ask_claude_async(user_message))
+async def _test():
+    """マルチターンで記憶が繋がってるかの確認用"""
+    # async with = 入る時に connect()、抜ける時に disconnect() を自動でやってくれる書き方。
+    # この with ブロックの中にいる間、セッションは生きたまま維持される。
+    async with ClaudeSDKClient(options=FALCON_OPTIONS) as client:
+        print("1ターン目:", await ask_claude(client, "おいらの好きな食い物はカレーだ。覚えといてくれ"))
+        print("2ターン目:", await ask_claude(client, "で、おいらの好きな食い物は何だっけ?"))
 
 
 if __name__ == "__main__":
-    reply = ask_claude("こんにちは、FALCON")
-    print(reply)
+    asyncio.run(_test())
