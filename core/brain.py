@@ -12,8 +12,8 @@ from claude_agent_sdk import (
     tool,
     create_sdk_mcp_server,
 )
-from core.tools.weather import get_weather  
-from core.tools.memo import save_memo       
+from core.tools.weather import get_weather
+from core.tools.memo import save_memo, list_memos, search_memos, read_memo
 
 SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)専用のAIアシスタントです。
 
@@ -48,25 +48,29 @@ SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)�
 - ただし直前に取得済みの予報について聞かれた場合(「じゃあ明日は?」等)は、
   再取得せず会話の流れから答える。
 
-### save_memo
-save_memo は「隼が後で読み返すためのファイル」を作るツール。
-FALCON自身の記憶用ではない(FALCONはメモを読み返せない)。
+## メモ機能
 
-呼ぶ場合:
-- 「メモして」「記録して」「保存して」「残しといて」など、
-  ファイルとして残す意図が明確なとき。
+メモには2つの役割がある。混同しないこと。
 
-呼ばない場合:
-- 「覚えといて」「これ前提な」など、会話の中で把握しておけば足りる指示。
-  これは会話の流れで覚えておけばよく、ファイルは作らない。
-- 迷ったときは勝手に保存せず、「メモに残しますか?」と確認する。
+### 会話中の記憶
+このセッション中の話は会話履歴で覚えている。ファイルは要らない。
+- 「覚えておいて」「これ前提な」→ ファイルは作らず、会話の中で把握する。
+- カレーが好き、等の一時的な情報でいちいちメモを作らない。
 
-引数:
-- mode="summary" … 「要約して」と言われたとき。要点をまとめて content に入れる。
-- mode="raw" … 「そのまま」「原文で」と言われたとき。渡された内容をそのまま content に。
-- 指定がなければ raw。
-- title は内容から適切に付ける。
+### メモを探す(read系)
+隼が過去の話・別の日の話・「前にメモしたやつ」を聞いてきたら、記憶に無ければメモを探す。
+- まず search_memos でキーワード検索する。
+- 空振りしたら言葉を変えて数回試す(「カレー」で無ければ「食べ物」等)。検索は軽いので構わない。
+- 一覧を眺めたいだけなら list_memos。中身が要るなら read_memo で1件開く。
+- 探しても無ければ「メモは見つかりませんでした」と正直に言う。憶測で答えない。
+
+### メモを作る(save_memo)
+「隼が後で読み返すためのファイル」を作るときだけ使う。
+- 呼ぶ: 「メモして」「記録して」「保存して」「残しといて」等、ファイル化の意図が明確なとき。
+- 呼ばない: 上記「会話中の記憶」で足りるとき。迷えば「メモに残しますか?」と確認する。
+- mode="summary"(要約)/"raw"(原文)。指定なければraw。titleは内容から適切に付ける。
 """
+
 
 @tool("get_weather", "指定した地名の天気予報を気象庁データから取得する", {"location": str})
 async def weather_tool(args):
@@ -88,13 +92,34 @@ async def save_memo_tool(args):
     return {"content": [{"type": "text", "text": f"メモを保存しました → {result['path']}"}]}
 
 
+@tool("list_memos", "保存済みメモの一覧(タイトル・日時・種別)を取得する。本文は含まない", {})
+async def list_memos_tool(args):
+    result = list_memos()
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool(
+    "search_memos",
+    "メモの本文をキーワードで検索する。空白区切りで複数語のAND検索。空振りしたら語を変えて呼び直してよい",
+    {"keyword": str},
+)
+async def search_memos_tool(args):
+    result = search_memos(args.get("keyword", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("read_memo", "指定したメモ1件の本文を読む。filenameはlist_memos/search_memosが返したものを渡す", {"filename": str})
+async def read_memo_tool(args):
+    result = read_memo(args.get("filename", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
 falcon_tools = create_sdk_mcp_server(
     name="falcon_tools",
     version="1.0.0",
-    tools=[weather_tool, save_memo_tool],
+    tools=[weather_tool, save_memo_tool, list_memos_tool, search_memos_tool, read_memo_tool],
 )
 
-# ここがポイント: 設定を「関数の外」に出してモジュール定数にした。
 # 設定はモジュール定数として外に出す。
 # クライアントを作るのは main.py 側なので、そこから渡せる場所に置く必要がある
 FALCON_OPTIONS = ClaudeAgentOptions(
@@ -111,10 +136,13 @@ FALCON_OPTIONS = ClaudeAgentOptions(
     strict_mcp_config=True,
 
     # ★3★ 自作ツールは確認なしで通す。
-    # これは「制限」じゃなく「確認スキップ」。1と2で絞った後の話だぜ
+    # これは「制限」じゃなく「確認スキップ」。1と2で絞った後の話
     allowed_tools=[
         "mcp__falcon__get_weather",
         "mcp__falcon__save_memo",
+        "mcp__falcon__list_memos",
+        "mcp__falcon__search_memos",
+        "mcp__falcon__read_memo",
     ],
 
     setting_sources=[],
@@ -126,10 +154,10 @@ async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
 
     answer = ""
     async for message in client.receive_response():
-
         if isinstance(message, ResultMessage) and message.result:
             answer = message.result
     return answer
+
 
 async def _test():
     """マルチターンで記憶が繋がってるかの確認用"""

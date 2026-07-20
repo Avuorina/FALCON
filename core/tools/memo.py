@@ -48,6 +48,26 @@ def _resolve_memo_path(filename: str) -> str | None:
     return real_path
 
 
+def _read_header(filename: str) -> dict:
+    """メモのヘッダ部分(タイトル・作成日時・種別)だけを読む。
+    --- が本文との区切りなので、そこで読むのを打ち切る(本文には入らない)。
+    """
+    title, created, mode = "", "", ""
+    path = os.path.join(MEMO_DIR, filename)
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if line.startswith("# "):
+                title = line[2:]
+            elif line.startswith("- 作成: "):
+                created = line[len("- 作成: "):]
+            elif line.startswith("- 種別: "):
+                mode = line[len("- 種別: "):]
+            elif line.startswith("---"):
+                break
+    return {"title": title, "created": created, "mode": mode}
+
+
 def save_memo(title: str, content: str, mode: str = "raw") -> dict:
     """メモをmarkdownファイルとして memos/ に保存する。
 
@@ -91,30 +111,164 @@ def list_memos() -> dict:
         if not filename.endswith(".md"):
             continue
 
-        path = os.path.join(MEMO_DIR, filename)
-        title, created, mode = "", "", ""
-
-        # ヘッダ部分だけ読む。--- が本文との区切りなので、そこで打ち切る
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.rstrip("\n")
-                if line.startswith("# "):
-                    title = line[2:]
-                elif line.startswith("- 作成: "):
-                    created = line[len("- 作成: "):]
-                elif line.startswith("- 種別: "):
-                    mode = line[len("- 種別: "):]
-                elif line.startswith("---"):
-                    break
-
+        header = _read_header(filename)
         memos.append({
             "filename": filename,
-            "title": title,
-            "created": created,
-            "mode": mode,
+            "title": header["title"],
+            "created": header["created"],
+            "mode": header["mode"],
         })
 
     return {"memos": memos}
+
+
+def search_memos(keyword: str) -> dict:
+    """memos/ の本文を対象に、キーワードを含むメモを探す。
+
+    keyword: 探したい語(単純な文字列一致。大文字小文字は区別しない)
+
+    list_memos がタイトルの一覧を渡す「目次」なのに対して、
+    こちらは本文まで見る「索引」。タイトルに出てこない語で探すときに使う。
+    """
+    if not keyword:
+        return {"error": "キーワードが空です。"}
+
+    if not os.path.isdir(MEMO_DIR):
+        return {"keyword": keyword, "hits": []}
+
+    needle = keyword.lower()
+    hits = []
+
+    for filename in sorted(os.listdir(MEMO_DIR), reverse=True):  # 新しい順
+        if not filename.endswith(".md"):
+            continue
+
+        path = os.path.join(MEMO_DIR, filename)
+        with open(path, "r", encoding="utf-8") as f:
+            body = f.read()
+
+        if needle not in body.lower():
+            continue
+
+        # 該当行だけ抜き出す。全文を返すとコンテキストを圧迫するので、
+        # 「どのメモに、どんな文脈で入っていたか」が分かる最小限に留める
+        matched_lines = [
+            line.strip()
+            for line in body.splitlines()
+            if needle in line.lower() and line.strip()
+        ]
+
+        title = ""
+        for line in body.splitlines():
+            if line.startswith("# "):
+                title = line[2:]
+                break
+
+        hits.append({
+            "filename": filename,
+            "title": title,
+            "matched_lines": matched_lines,
+        })
+
+    return {"keyword": keyword, "hits": hits}
+
+
+def search_memos(keyword: str, max_results: int = 10) -> dict:
+    """タイトルまたは本文に keyword を含むメモを、新しい順に探す。
+
+    ★検索は機械的な文字列マッチングだけ★
+    「同義語も拾う」ような賢さはここには置かない。どの語で引くかを考えるのは
+    FALCON(Claude)の仕事で、このツールは「入っているか否か」だけを答える。
+    賢さを両側に置くと、いつか食い違う。
+
+    keyword:     探す文字列
+    max_results: 返す最大件数(コンテキストを膨らませないための上限)
+    """
+    if not keyword:
+        return {"error": "検索する語を指定してください。"}
+
+    if not os.path.isdir(MEMO_DIR):
+        return {"keyword": keyword, "hits": []}
+
+    needle = keyword.lower()  # 英数字の大文字小文字を無視するため両方を小文字に揃える
+    hits = []
+
+    for filename in sorted(os.listdir(MEMO_DIR), reverse=True):  # 新しい順
+        if not filename.endswith(".md"):
+            continue
+
+        with open(os.path.join(MEMO_DIR, filename), "r", encoding="utf-8") as f:
+            body = f.read()
+
+        pos = body.lower().find(needle)
+        if pos == -1:
+            continue
+
+        # ヒット箇所の前後を切り出して抜粋にする(全文は read_memo に任せる)
+        start = max(0, pos - 30)
+        end = min(len(body), pos + len(keyword) + 30)
+        snippet = body[start:end].replace("\n", " ").strip()
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(body):
+            snippet = snippet + "..."
+
+        hits.append({"filename": filename, "snippet": snippet})
+
+        if len(hits) >= max_results:
+            break
+
+    return {"keyword": keyword, "hits": hits}
+
+
+def search_memos(keyword: str, limit: int = 5) -> dict:
+    """memos/ の本文をキーワードで検索し、ヒットした箇所の抜粋を返す。
+
+    keyword: 空白区切りで複数指定するとAND検索(全部含むメモだけヒット)
+    limit:   返す件数の上限。コンテキストを膨らませないための歯止め
+
+    ★設計方針★
+    あいまい検索や同義語の展開はここでやらない。
+    空振りしたらFALCON側が言葉を変えて呼び直せばいい(検索はローカルなので無料)。
+    ツールは単純・正直に、賢さは呼ぶ側に任せる。
+    """
+    terms = keyword.split()
+    if not terms:
+        return {"error": "検索キーワードが空です。"}
+
+    if not os.path.isdir(MEMO_DIR):
+        return {"keyword": keyword, "hits": []}
+
+    hits = []
+    for filename in sorted(os.listdir(MEMO_DIR), reverse=True):  # 新しい順
+        if not filename.endswith(".md"):
+            continue
+
+        with open(os.path.join(MEMO_DIR, filename), "r", encoding="utf-8") as f:
+            body = f.read()
+
+        # 英数字のキーワードで大小文字の差に引っかからないよう、比較用は小文字に揃える
+        haystack = body.lower()
+        if not all(t.lower() in haystack for t in terms):
+            continue  # 1語でも欠けたら不採用(AND検索)
+
+        # 最初の語が現れた行を抜粋として返す。全文は read_memo に任せる
+        snippet = ""
+        for line in body.splitlines():
+            if terms[0].lower() in line.lower():
+                snippet = line.strip()
+                break
+
+        hits.append({
+            "filename": filename,
+            "title": _read_header(filename).get("title", ""),
+            "snippet": snippet,
+        })
+
+        if len(hits) >= limit:
+            break
+
+    return {"keyword": keyword, "hits": hits}
 
 
 def read_memo(filename: str) -> dict:
@@ -140,6 +294,10 @@ if __name__ == "__main__":
     for m in list_memos()["memos"]:
         print(m)
 
+    print("\n=== search_memos ===")
+    for kw in ["カレー", "天気", "牛乳", "存在しない語"]:
+        print(f"  {kw!r} → {search_memos(kw)}")
+
     print("\n=== read_memo(正常系) ===")
     first = list_memos()["memos"][0]["filename"]
     print(read_memo(first)["body"])
@@ -147,3 +305,8 @@ if __name__ == "__main__":
     print("=== read_memo(攻撃系) ===")
     for bad in ["../../.env", "../.env", "..\\..\\.env", ".env", "memo.py", "/etc/passwd"]:
         print(f"  {bad!r:20} → {read_memo(bad)}")
+
+    print("\n=== search_memos ===")
+    for kw in ["カレー", "天気", "カレー 隼", "存在しない語", "牛乳"]:
+        r = search_memos(kw)
+        print(f"  {kw!r:12} → {r.get('hits', r)}")
