@@ -219,3 +219,10 @@ __marimo__/
 
 # memos
 memos/
+
+# Google OAuth
+config/google_client_secret.json
+config/google_token.json
+
+# tasks
+tasks/
