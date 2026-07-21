@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import os
@@ -13,13 +14,35 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 from core.tools.weather import get_weather
-from core.tools.memo import save_memo, list_memos, search_memos, read_memo
+from core.tools.memo import save_memo, list_memos, search_memos, read_memo, MEMO_DIR
 from core.tools.calendar import list_events, create_event
 from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
 
 from datetime import datetime
 
-async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
+# _test() が流す会話シナリオ。ここに1行足すだけで新しいシナリオを追加できる
+SCENARIOS = {
+    "weather": [
+        "名古屋の天気は?",
+        "じゃあ豊田はどうだ?",  # 区分またぎ(西部/東部)の言い分けを見る
+    ],
+    "memo": [
+        "「うどんも好き」って一言メモしといて",
+        "さっき保存したうどんのメモ、探して",
+    ],
+    "calendar": [
+        "今週の予定を教えてくれ",
+    ],
+    "task": [
+        "りんごを買うのをタスクに追加して",
+        "タスク一覧見せて",
+        "さっき追加したタスク、完了にして",
+        "完了したのも含めて一覧見せて",
+    ],
+}
+
+
+async def ask_claude(client: ClaudeSDKClient, user_message: str, debug: bool = False) -> str:
     today_str = datetime.now().strftime("%Y年%m月%d日(%a)")
     message_with_date = f"[今日の日付: {today_str}]\n{user_message}"
 
@@ -27,7 +50,8 @@ async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
 
     answer = ""
     async for message in client.receive_response():
-        #print(f"[DEBUG] {type(message).__name__}: {message}")   # ★調査用★
+        if debug:
+            print(f"[DEBUG] {type(message).__name__}: {message}")
         if isinstance(message, ResultMessage) and message.result:
             answer = message.result
     return answer
@@ -235,13 +259,59 @@ FALCON_OPTIONS = ClaudeAgentOptions(
     setting_sources=[],
 )
 
-async def _test():
-    """complete_task / delete_task の確認用"""
+async def _test(scenario: str = "task", debug: bool = False):
+    """SCENARIOS で選んだ会話を1セッションで流し、動作確認する。
+
+    scenario: SCENARIOS のキー("weather" / "memo" / "calendar" / "task")
+    debug:    Trueなら各ターンのSDK生メッセージ(SystemMessage/ToolUseBlock等)を表示する
+
+    ★後片付け★
+    "task"/"memo" は実データ(tasks.json / memos/)に書き込むため、実行前後の差分を取り、
+    テストで増えた分だけ削除する。ここでの削除は list_tasks/delete_task/list_memos を
+    直接Pythonから呼んでいて、FALCON(LLM)に頼んでいない。
+    「delete_taskは実行前に確認」はFALCONが隼と会話する時のルールであり、
+    テストスクリプト自身の後片付けとは別の話だから、会話を介さず直接消してよい。
+    """
+    messages = SCENARIOS.get(scenario)
+    if messages is None:
+        print(f"未知のシナリオです: {scenario}(選べるのは {list(SCENARIOS)})")
+        return
+
+    # 後片付け用に、実行前の状態を控えておく
+    existing_task_ids = None
+    existing_memo_files = None
+    if scenario == "task":
+        existing_task_ids = {t["id"] for t in list_tasks(include_done=True)["tasks"]}
+    if scenario == "memo":
+        existing_memo_files = {m["filename"] for m in list_memos()["memos"]}
+
     async with ClaudeSDKClient(options=FALCON_OPTIONS) as client:
-        print("1:", await ask_claude(client, "りんごを買うのをタスクに追加して"))
-        print("2:", await ask_claude(client, "タスク一覧見せて"))
-        print("3:", await ask_claude(client, "完了したのも含めて一覧見せて"))
+        for i, msg in enumerate(messages, start=1):
+            print(f"{i}: {await ask_claude(client, msg, debug=debug)}")
+
+    # ★後片付け★ このテストで新規に増えた分だけ直接削除する(会話を介さない)
+    if scenario == "task":
+        new_ids = {t["id"] for t in list_tasks(include_done=True)["tasks"]} - existing_task_ids
+        for task_id in new_ids:
+            delete_task(task_id)
+        if new_ids:
+            print(f"[cleanup] テストで追加したタスクを削除しました: {sorted(new_ids)}")
+
+    if scenario == "memo":
+        new_files = {m["filename"] for m in list_memos()["memos"]} - existing_memo_files
+        for filename in new_files:
+            os.remove(os.path.join(MEMO_DIR, filename))
+        if new_files:
+            print(f"[cleanup] テストで追加したメモを削除しました: {sorted(new_files)}")
 
 
 if __name__ == "__main__":
-    asyncio.run(_test())
+    parser = argparse.ArgumentParser(description="FALCONの頭脳(brain.py)の単体テスト")
+    parser.add_argument(
+        "scenario", nargs="?", default="task", choices=list(SCENARIOS),
+        help="実行するシナリオ(省略時はtask)",
+    )
+    parser.add_argument("--debug", action="store_true", help="SDKの生メッセージを表示する")
+    args = parser.parse_args()
+
+    asyncio.run(_test(args.scenario, debug=args.debug))
