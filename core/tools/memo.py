@@ -121,106 +121,6 @@ def list_memos() -> dict:
 
     return {"memos": memos}
 
-
-def search_memos(keyword: str) -> dict:
-    """memos/ の本文を対象に、キーワードを含むメモを探す。
-
-    keyword: 探したい語(単純な文字列一致。大文字小文字は区別しない)
-
-    list_memos がタイトルの一覧を渡す「目次」なのに対して、
-    こちらは本文まで見る「索引」。タイトルに出てこない語で探すときに使う。
-    """
-    if not keyword:
-        return {"error": "キーワードが空です。"}
-
-    if not os.path.isdir(MEMO_DIR):
-        return {"keyword": keyword, "hits": []}
-
-    needle = keyword.lower()
-    hits = []
-
-    for filename in sorted(os.listdir(MEMO_DIR), reverse=True):  # 新しい順
-        if not filename.endswith(".md"):
-            continue
-
-        path = os.path.join(MEMO_DIR, filename)
-        with open(path, "r", encoding="utf-8") as f:
-            body = f.read()
-
-        if needle not in body.lower():
-            continue
-
-        # 該当行だけ抜き出す。全文を返すとコンテキストを圧迫するので、
-        # 「どのメモに、どんな文脈で入っていたか」が分かる最小限に留める
-        matched_lines = [
-            line.strip()
-            for line in body.splitlines()
-            if needle in line.lower() and line.strip()
-        ]
-
-        title = ""
-        for line in body.splitlines():
-            if line.startswith("# "):
-                title = line[2:]
-                break
-
-        hits.append({
-            "filename": filename,
-            "title": title,
-            "matched_lines": matched_lines,
-        })
-
-    return {"keyword": keyword, "hits": hits}
-
-
-def search_memos(keyword: str, max_results: int = 10) -> dict:
-    """タイトルまたは本文に keyword を含むメモを、新しい順に探す。
-
-    ★検索は機械的な文字列マッチングだけ★
-    「同義語も拾う」ような賢さはここには置かない。どの語で引くかを考えるのは
-    FALCON(Claude)の仕事で、このツールは「入っているか否か」だけを答える。
-    賢さを両側に置くと、いつか食い違う。
-
-    keyword:     探す文字列
-    max_results: 返す最大件数(コンテキストを膨らませないための上限)
-    """
-    if not keyword:
-        return {"error": "検索する語を指定してください。"}
-
-    if not os.path.isdir(MEMO_DIR):
-        return {"keyword": keyword, "hits": []}
-
-    needle = keyword.lower()  # 英数字の大文字小文字を無視するため両方を小文字に揃える
-    hits = []
-
-    for filename in sorted(os.listdir(MEMO_DIR), reverse=True):  # 新しい順
-        if not filename.endswith(".md"):
-            continue
-
-        with open(os.path.join(MEMO_DIR, filename), "r", encoding="utf-8") as f:
-            body = f.read()
-
-        pos = body.lower().find(needle)
-        if pos == -1:
-            continue
-
-        # ヒット箇所の前後を切り出して抜粋にする(全文は read_memo に任せる)
-        start = max(0, pos - 30)
-        end = min(len(body), pos + len(keyword) + 30)
-        snippet = body[start:end].replace("\n", " ").strip()
-        if start > 0:
-            snippet = "..." + snippet
-        if end < len(body):
-            snippet = snippet + "..."
-
-        hits.append({"filename": filename, "snippet": snippet})
-
-        if len(hits) >= max_results:
-            break
-
-    return {"keyword": keyword, "hits": hits}
-
-
 def search_memos(keyword: str, limit: int = 5) -> dict:
     """memos/ の本文をキーワードで検索し、ヒットした箇所の抜粋を返す。
 
@@ -252,12 +152,24 @@ def search_memos(keyword: str, limit: int = 5) -> dict:
         if not all(t.lower() in haystack for t in terms):
             continue  # 1語でも欠けたら不採用(AND検索)
 
+        # ヘッダー(タイトル・作成日時・種別)と本文を "---" で分離する。
+        # スニペットは本文側だけを対象にする(タイトル行が拾われるバグの対策)
+        _, sep, content = body.partition("---")
+        if not sep:
+            # 万一 "---" が無い壊れたメモなら、全体を本文扱いにするしかない
+            content = body
+
         # 最初の語が現れた行を抜粋として返す。全文は read_memo に任せる
         snippet = ""
-        for line in body.splitlines():
+        for line in content.splitlines():
             if terms[0].lower() in line.lower():
                 snippet = line.strip()
                 break
+
+        if not snippet:
+            # 本文側には無かった = タイトル等ヘッダーにしかヒットしていない、ということ
+            # 空のまま返すと壊れて見えるので、正直にその旨を書く
+            snippet = "(タイトルにヒット。本文中に一致箇所なし)"
 
         hits.append({
             "filename": filename,
