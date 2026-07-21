@@ -14,6 +14,23 @@ from claude_agent_sdk import (
 )
 from core.tools.weather import get_weather
 from core.tools.memo import save_memo, list_memos, search_memos, read_memo
+from core.tools.calendar import list_events, create_event
+from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
+
+from datetime import datetime
+
+async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
+    today_str = datetime.now().strftime("%Y年%m月%d日(%a)")
+    message_with_date = f"[今日の日付: {today_str}]\n{user_message}"
+
+    await client.query(message_with_date)
+
+    answer = ""
+    async for message in client.receive_response():
+        #print(f"[DEBUG] {type(message).__name__}: {message}")   # ★調査用★
+        if isinstance(message, ResultMessage) and message.result:
+            answer = message.result
+    return answer
 
 SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)専用のAIアシスタントです。
 
@@ -69,6 +86,15 @@ SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)�
 - 呼ぶ: 「メモして」「記録して」「保存して」「残しといて」等、ファイル化の意図が明確なとき。
 - 呼ばない: 上記「会話中の記憶」で足りるとき。迷えば「メモに残しますか?」と確認する。
 - mode="summary"(要約)/"raw"(原文)。指定なければraw。titleは内容から適切に付ける。
+
+## タスク機能
+
+- 「〜をやらないと」「タスクに追加して」「やること増やして」など、
+  やるべきことを覚えておいてほしい意図が明確な時に add_task を使う。
+- 単なる相談・雑談・仮の話では追加しない。迷えば「タスクに追加しますか?」と確認する。
+- delete_task は取り消せない。実行前に必ず確認を取る。
+- 期限(due)を言われなければ空欄のまま追加してよい。
+- 一覧・状態を答える時は必ず list_tasks を呼ぶ。直前の操作結果の記憶だけで答えない。
 """
 
 
@@ -114,10 +140,57 @@ async def read_memo_tool(args):
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
 
 
+@tool("list_events", "Googleカレンダーの予定を取得する。日数(days)を指定すると今日からその日数分を見る", {"days": int})
+async def list_events_tool(args):
+    result = list_events(args.get("days", 7))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool(
+    "create_event",
+    "Googleカレンダーに予定を作成する。startとendはISO 8601形式(例: 2026-07-21T14:00:00)で渡すこと",
+    {"summary": str, "start": str, "end": str, "description": str},
+)
+async def create_event_tool(args):
+    result = create_event(
+        args.get("summary", ""),
+        args.get("start", ""),
+        args.get("end", ""),
+        args.get("description", ""),
+    )
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+@tool("add_task", "新しいタスクを追加する。due(期限)は任意、例: '2026-07-25'", {"title": str, "due": str})
+async def add_task_tool(args):
+    result = add_task(args.get("title", ""), args.get("due"))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("list_tasks", "タスクの一覧を取得する。include_done=Trueで完了済みも含める", {"include_done": bool})
+async def list_tasks_tool(args):
+    result = list_tasks(args.get("include_done", False))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("complete_task", "指定したIDのタスクを完了にする", {"task_id": str})
+async def complete_task_tool(args):
+    result = complete_task(args.get("task_id", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("delete_task", "指定したIDのタスクを完全に削除する。取り消せないので実行前に確認すること", {"task_id": str})
+async def delete_task_tool(args):
+    result = delete_task(args.get("task_id", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
 falcon_tools = create_sdk_mcp_server(
     name="falcon_tools",
     version="1.0.0",
-    tools=[weather_tool, save_memo_tool, list_memos_tool, search_memos_tool, read_memo_tool],
+    tools=[
+        weather_tool, save_memo_tool, list_memos_tool, search_memos_tool, read_memo_tool,
+        list_events_tool, create_event_tool,
+        add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool,
+    ],
 )
 
 # 設定はモジュール定数として外に出す。
@@ -143,27 +216,23 @@ FALCON_OPTIONS = ClaudeAgentOptions(
         "mcp__falcon__list_memos",
         "mcp__falcon__search_memos",
         "mcp__falcon__read_memo",
+        "mcp__falcon__list_events",
+        "mcp__falcon__create_event",
+        "mcp__falcon__add_task",
+        "mcp__falcon__list_tasks",
+        "mcp__falcon__complete_task",
+        "mcp__falcon__delete_task",
     ],
 
     setting_sources=[],
 )
 
-
-async def ask_claude(client: ClaudeSDKClient, user_message: str) -> str:
-    await client.query(user_message)
-
-    answer = ""
-    async for message in client.receive_response():
-        if isinstance(message, ResultMessage) and message.result:
-            answer = message.result
-    return answer
-
-
 async def _test():
-    """マルチターンで記憶が繋がってるかの確認用"""
+    """complete_task / delete_task の確認用"""
     async with ClaudeSDKClient(options=FALCON_OPTIONS) as client:
-        print("1ターン目:", await ask_claude(client, "私の好きな食べ物はカレーだ。覚えておけ"))
-        print("2ターン目:", await ask_claude(client, "で、私の好きな食べ物は何だったか?"))
+        print("1:", await ask_claude(client, "りんごを買うのをタスクに追加して"))
+        print("2:", await ask_claude(client, "タスク一覧見せて"))
+        print("3:", await ask_claude(client, "完了したのも含めて一覧見せて"))
 
 
 if __name__ == "__main__":
