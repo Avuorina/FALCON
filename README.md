@@ -2,7 +2,7 @@
 
 **F**ully **A**utonomous **L**inguistic **C**omputing **O**perations **N**etwork
 
-Claude を頭脳に使った、自分専用のAIアシスタント。まずはPCのコンソールで動く版を開発中。
+Claude を頭脳に使った、自分専用のAIアシスタント。PCのコンソール版に加え、自宅PCで動くWebサーバー版(PWA)を開発中。
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -17,8 +17,8 @@ FALCON は、Anthropic の Claude を頭脳として動く、パーソナルAI�
 頭脳部分は **[Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview)** を通して Claude Code 上で動作します。
 そのため、**Claude のサブスクリプション(Pro / Max など)でログイン認証すれば、API従量課金なしで利用できます**（APIキーでの従量課金も選択可）。
 
-> **現状**: PC単体で動くコンソール版。会話履歴を保持したマルチターン対話に対応。メモの検索・読み出し、Googleカレンダーの閲覧・予定作成、タスクの追加・一覧・完了・削除に対応。
-> **最終目標**: サーバー + PWA 構成にして、PCでもスマホでも同じFALCONを使えるようにする。
+> **現状**: PC単体で動くコンソール版に加え、自宅PC上でFastAPIサーバーとして動かし、同じWi-Fi内のスマホからPWA(Webアプリ)として利用できるMVPが完成。会話履歴を保持したマルチターン対話、メモの検索・読み出し、Googleカレンダーの閲覧・予定作成、タスクの追加・一覧・完了・削除に対応。
+> **最終目標**: サーバー + PWA 構成にして、PCでもスマホでも同じFALCONを使えるようにする。外出先からのアクセス(VPN経由)は今後の課題。
 
 ---
 
@@ -31,6 +31,7 @@ FALCON は、Anthropic の Claude を頭脳として動く、パーソナルAI�
 | メモ | markdownで保存。要約(`summary`)/原文(`raw`)を切替(`save_memo`)。過去のメモは検索・読み出し可能(`list_memos` / `search_memos` / `read_memo`) |
 | スケジュール | Googleカレンダーの予定を取得(`list_events`)・作成(`create_event`) |
 | タスク | 追加(`add_task`)・一覧(`list_tasks`)・完了(`complete_task`)・削除(`delete_task`)。期限は任意、ローカルのJSONファイルで管理 |
+| PWA(スマホ対応) | 自宅PCでサーバー(`server.py`)を起動すれば、同じWi-Fi内のスマホからブラウザ経由で会話できる。ホーム画面に追加してアプリのように使用可能 |
 
 ---
 
@@ -43,6 +44,7 @@ FALCON は、Anthropic の Claude を頭脳として動く、パーソナルAI�
 | Claude Code CLI | `@anthropic-ai/claude-code` |
 | 認証 | Claude サブスク（Pro/Max等）でのログイン **または** Anthropic APIキー |
 | Google Cloud プロジェクト | Calendar連携を使う場合、OAuthクライアント情報(デスクトップアプリ)が必要 |
+| (PWA版のみ) 同一Wi-Fiネットワーク | スマホからアクセスする場合、サーバーを動かすPCとスマホが同じWi-Fiに接続している必要がある |
 
 ---
 
@@ -123,6 +125,21 @@ export ANTHROPIC_API_KEY=sk-ant-xxxxx
 
 > `google_client_secret.json` と `google_token.json` はどちらも機密情報です。`.gitignore` に含まれているため、通常はGit管理下に入りません。
 
+### 6. サーバー版(PWA)を使う場合(任意)
+
+スマホからFALCONに話しかけたい場合、自宅PCでサーバーを起動します。
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+- `--host 0.0.0.0` を指定することで、同じWi-Fi内の他の端末(スマホ)からもアクセスできるようになります(`127.0.0.1`のままだと自分自身のPCからしかアクセスできません)。
+- サーバーを起動したPCの、Wi-FiのローカルIPアドレス(`ipconfig`や`ifconfig`で確認できる`192.168.x.x`形式のアドレス)を控えておいてください。
+
+スマホのブラウザで `http://(控えたIPアドレス):8000/` を開くとチャット画面が表示されます。共有ボタンから「ホーム画面に追加」すると、アプリのように起動できます。
+
+> サーバーが動いているPCがスリープすると、FALCONも一緒に停止します。スマホから使いたい間は、PCの電源設定で**スリープを無効化**しておいてください(ディスプレイの電源を切るだけなら影響ありません)。
+
 ---
 
 ## 使い方
@@ -164,6 +181,14 @@ FALCON: 現在のタスクは以下の1件です。
 - レポート提出(期限: 7月25日)
 ```
 
+**サーバー版(PWA)を起動する:**
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+起動後、同じWi-Fi内のスマホのブラウザで`http://(サーバーPCのIPアドレス):8000/`を開くと、チャット画面が表示されます。会話の文脈・履歴はサーバー側で保持されるため、ページをリロードしても会話は消えません。
+
 ---
 
 ## プロジェクト構成
@@ -185,8 +210,12 @@ FALCON/
 │       └── tasks.py        # タスクの追加・一覧・完了・削除
 ├── memos/                  # メモの保存先(実行時に自動生成 / Git管理外)
 ├── tasks/                  # タスクの保存先(tasks.json、実行時に自動生成 / Git管理外)
+├── static/                 # PWA用の静的ファイル
+│   ├── index.html          # チャット画面(HTML/CSS/JS)
+│   └── manifest.json       # PWA設定
 ├── Handover/               # 開発の引継ぎメモ
 ├── main.py                 # 会話ループ(コンソール版のエントリポイント)
+├── server.py                # サーバー版のエントリポイント(FastAPI)
 ├── requirements.txt
 ├── .env.example
 ├── LICENSE                 # MIT
@@ -226,6 +255,12 @@ Claudeは会話の中で「今日の日付」を自力で正確に把握でき�
 
 現在のOAuthクライアントは「デスクトップアプリ」種別で作成しており、PC上で直接ブラウザを開いて認証する方式です。将来サーバー+PWA構成に移行する際は、認証をサーバー側に一元化するため、クライアント種別を「ウェブアプリケーション」に作り直す想定です。
 
+### サーバー版のセッション設計
+
+`server.py`では、サーバー起動時に`ClaudeSDKClient`を1回だけ生成し、以降すべてのリクエストで使い回しています(FastAPIの`lifespan`機能を利用)。コンソール版で「`async with`を`while`ループの外に置く」としていた原則を、サーバーの生存期間全体に拡張した形です。リクエストごとにクライアントを作り直すと、会話の文脈が失われてしまいます。
+
+会話履歴(`chat_history`)もサーバー側のメモリ上で一元管理しており、スマホ・PCどちらからアクセスしても同じ履歴が見えます。ただし現状はメモリ上のみの保持のため、**サーバーを再起動すると会話の文脈・履歴の両方がリセットされます**。
+
 ---
 
 ## ロードマップ
@@ -238,7 +273,9 @@ Claudeは会話の中で「今日の日付」を自力で正確に把握でき�
 - [x] メモの読み出し(`read_memo` / 長期記憶化)
 - [x] Googleカレンダー連携(予定の閲覧・作成)
 - [x] タスク管理(ローカル完結の自作。Asanaは有料プランのみだったため見送り)
-- [ ] サーバー + PWA 化(PC / スマホ両対応)
+- [x] サーバー + PWA 化(MVP: 自宅Wi-Fi内でスマホから利用可能)
+- [ ] 外出先からのアクセス(VPN経由)・Wake-on-LAN
+- [ ] オフライン対応(Service Worker)
 
 ---
 
