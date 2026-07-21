@@ -1,0 +1,9 @@
+{
+    "name": "FALCON",
+    "short_name": "FALCON",
+    "start_url": "/static/index.html",
+    "display": "standalone",
+    "background_color": "#1a1a1a",
+    "theme_color": "#1a1a1a"
+    
+}
