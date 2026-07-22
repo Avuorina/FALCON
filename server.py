@@ -33,6 +33,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def root():
     return FileResponse("static/index.html")
 
+
+@app.get("/sw.js")
+async def service_worker():
+    # /static/ 配下に置くと scope が /static/ 限定になり、
+    # ページ本体(/)へのアクセスを横取りできなくなるため、ルートから直接配信する
+    return FileResponse("static/sw.js", media_type="application/javascript")
+
 @app.get("/history")
 async def get_history():
     return {"history": chat_history}

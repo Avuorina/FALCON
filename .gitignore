@@ -157,6 +157,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Tailscale証明書
+*.crt
+*.key
+
 # Spyder project settings
 .spyderproject
 .spyproject

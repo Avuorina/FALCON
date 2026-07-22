@@ -401,6 +401,14 @@ updateStats();
 setInterval(updateStats, 2000);
 
 loadHistory();
+
+// Service Worker登録(オフライン対応)。
+// HTTPSかlocalhostでしか動かないため、Tailscaleの証明書でHTTPS化した上で使う前提
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js");
+    });
+}
     </script>
 </body>
 </html>

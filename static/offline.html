@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>FALCON - オフライン</title>
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --accent: #ff8a3d;
+            --text-primary: #eef1f6;
+            --text-dim: #5c6474;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'JetBrains Mono', monospace, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text-primary);
+            height: 100vh;
+            height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            text-align: center;
+        }
+        .box { max-width: 360px; }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            margin: 0 auto 20px;
+            opacity: 0.5;
+        }
+        h1 {
+            font-size: 18px;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            margin-bottom: 12px;
+        }
+        p {
+            font-size: 14px;
+            color: var(--text-dim);
+            line-height: 1.7;
+            margin-bottom: 24px;
+        }
+        button {
+            padding: 10px 24px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 138, 61, 0.4);
+            background: transparent;
+            color: var(--accent);
+            font-size: 14px;
+            font-family: inherit;
+        }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <div class="status-dot"></div>
+        <h1>FALCON - OFFLINE</h1>
+        <p>FALCONサーバーに接続できません。<br>PCの電源・Wi-Fi・Tailscaleの接続状況を確認してから、もう一度お試しください。</p>
+        <button onclick="location.reload()">再試行</button>
+    </div>
+</body>
+</html>
