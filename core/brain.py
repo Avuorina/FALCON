@@ -15,7 +15,7 @@ from claude_agent_sdk import (
 )
 from core.tools.weather import get_weather
 from core.tools.memo import save_memo, list_memos, search_memos, read_memo, MEMO_DIR
-from core.tools.calendar import list_events, create_event
+from core.tools.gcal import list_events, create_event
 from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
 from core.tools.power import set_power_plan, get_power_plan
 
