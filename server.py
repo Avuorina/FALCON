@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from claude_agent_sdk import ClaudeSDKClient
 
 from core.brain import FALCON_OPTIONS, ask_claude
+from core.tools.system_stats import get_system_stats
 
 falcon_client: ClaudeSDKClient | None = None
 chat_history: list[dict] = []
@@ -35,6 +36,11 @@ async def root():
 @app.get("/history")
 async def get_history():
     return {"history": chat_history}
+
+
+@app.get("/system-stats")
+async def system_stats():
+    return get_system_stats()
 
 
 class ChatRequest(BaseModel):
