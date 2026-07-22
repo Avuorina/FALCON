@@ -17,6 +17,7 @@ from core.tools.weather import get_weather
 from core.tools.memo import save_memo, list_memos, search_memos, read_memo, MEMO_DIR
 from core.tools.calendar import list_events, create_event
 from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
+from core.tools.power import set_power_plan, get_power_plan
 
 from datetime import datetime
 
@@ -38,6 +39,11 @@ SCENARIOS = {
         "タスク一覧見せて",
         "さっき追加したタスク、完了にして",
         "完了したのも含めて一覧見せて",
+    ],
+    "power": [
+        "今の電源プラン教えて",
+        "省電力にして",
+        "普段通りに戻して",
     ],
 }
 
@@ -127,6 +133,16 @@ SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)�
 - delete_task は取り消せない。実行前に必ず確認を取る。
 - 期限(due)を言われなければ空欄のまま追加してよい。
 - 一覧・状態を答える時は必ず list_tasks を呼ぶ。直前の操作結果の記憶だけで答えない。
+
+## 電源プランの切替
+
+- 「省電力にして」「パフォーマンス優先にして」「電源プランを普段通りに戻して」等、
+  明確な指示があれば set_power_plan を呼ぶ。
+  - mode: power_saver(省電力) / balanced(バランス) / high_performance(高パフォーマンス)
+- 隼が言う「普段通り」「通常」は high_performance を指す。
+- 可逆的で実害の無い操作なので、delete_task 等と違い確認なしで即実行してよい。
+- 「今どのプラン?」と聞かれたら get_power_plan で確認してから答える。
+  記憶だけで答えない(前回切り替えてから隼が手動で変えている可能性がある)。
 """
 
 
@@ -215,6 +231,22 @@ async def delete_task_tool(args):
     result = delete_task(args.get("task_id", ""))
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
 
+
+@tool(
+    "set_power_plan",
+    "Windowsの電源プランを切り替える。mode='power_saver'(省電力)/'balanced'(バランス)/'high_performance'(高パフォーマンス)",
+    {"mode": str},
+)
+async def set_power_plan_tool(args):
+    result = set_power_plan(args.get("mode", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("get_power_plan", "現在アクティブなWindowsの電源プランを確認する", {})
+async def get_power_plan_tool(args):
+    result = get_power_plan()
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
 falcon_tools = create_sdk_mcp_server(
     name="falcon_tools",
     version="1.0.0",
@@ -222,6 +254,7 @@ falcon_tools = create_sdk_mcp_server(
         weather_tool, save_memo_tool, list_memos_tool, search_memos_tool, read_memo_tool,
         list_events_tool, create_event_tool,
         add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool,
+        set_power_plan_tool, get_power_plan_tool,
     ],
 )
 
@@ -254,6 +287,8 @@ FALCON_OPTIONS = ClaudeAgentOptions(
         "mcp__falcon__list_tasks",
         "mcp__falcon__complete_task",
         "mcp__falcon__delete_task",
+        "mcp__falcon__set_power_plan",
+        "mcp__falcon__get_power_plan",
     ],
 
     setting_sources=[],
