@@ -250,6 +250,31 @@
         opacity: 0.4;
     }
 
+    #status-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    #speaker-toggle,
+    #reload-button {
+        background: transparent;
+        border: none;
+        font-size: 16px;
+        line-height: 1;
+        padding: 4px;
+        flex-shrink: 0;
+        cursor: pointer;
+    }
+
+    /* マイクボタンは #chat-form button のスタイル(丸・アクセント枠)を共有する。
+       聞き取り中だけ .listening を付けて、既存の falcon-pulse アニメーションで光らせる */
+    #mic-button.listening {
+        background: var(--accent-faint);
+        border-color: var(--accent);
+        animation: falcon-pulse 1s infinite;
+    }
+
     /* モバイル幅ではCPU/MEM/NETバーとサブタイトルを隠してスペースを確保 */
     @media (max-width: 600px) {
         #stat-bars { display: none; }
@@ -281,9 +306,13 @@
             </div>
         </div>
 
-        <div id="status-indicator">
-            <div id="status-dot"></div>
-            <span id="status-label" class="mono">待機中 / IDLE</span>
+        <div id="status-group">
+            <div id="status-indicator">
+                <div id="status-dot"></div>
+                <span id="status-label" class="mono">待機中 / IDLE</span>
+            </div>
+            <button id="speaker-toggle" type="button" title="読み上げのON/OFF">&#128266;</button>
+            <button id="reload-button" type="button" title="再読み込み">&#128260;</button>
         </div>
     </header>
 
@@ -292,6 +321,7 @@
     <form id="chat-form">
         <span id="prompt-icon">&#10095;</span>
         <input type="text" id="message-input" placeholder="Ask FALCON anything..." autocomplete="off">
+        <button type="button" id="mic-button" title="音声入力">&#127908;</button>
         <button type="submit">&#10148;</button>
     </form>
 
@@ -351,6 +381,8 @@ form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const message = input.value.trim();
+    const wasVoice = nextSubmitIsVoice;
+    nextSubmitIsVoice = false;
     if (!message) return;
 
     addMessage("隼", message);
@@ -374,6 +406,7 @@ form.addEventListener("submit", async (event) => {
 
         const data = await response.json();
         addMessage("FALCON", data.reply);
+        speak(data.reply, { continueListening: wasVoice });
     } catch (error) {
         addMessage("システム", "FALCONに接続できませんでした。Wi-Fiやサーバーの状態を確認してください。");
     } finally {
@@ -381,6 +414,117 @@ form.addEventListener("submit", async (event) => {
         setProcessing(false);
     }
 });
+// ★音声入力(STT)★ ブラウザ標準のWeb Speech APIを使う。
+// 対応してないブラウザ(Firefox等)ではボタンごと隠す。テキスト入力は今まで通り使えるので実害は無い
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micButton = document.getElementById("mic-button");
+
+let recognition = null;
+let isListening = false;
+let nextSubmitIsVoice = false; // 直前の送信が音声由来だったかどうか(連続会話の判定に使う)
+
+if (SpeechRecognitionAPI) {
+    recognition = new SpeechRecognitionAPI();
+    recognition.lang = "ja-JP";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.addEventListener("start", () => {
+        isListening = true;
+        micButton.classList.add("listening");
+    });
+
+    recognition.addEventListener("end", () => {
+        isListening = false;
+        micButton.classList.remove("listening");
+    });
+
+    recognition.addEventListener("result", (event) => {
+        const transcript = event.results[0][0].transcript;
+        input.value = transcript;
+        nextSubmitIsVoice = true;
+        form.requestSubmit(); // 認識できたら自動送信する(会話のテンポを優先)
+    });
+
+    recognition.addEventListener("error", (event) => {
+        if (event.error === "no-speech") return; // 無音のタイムアウトは静かに無視する(連続会話ループもここで自然に止まる)
+        addMessage("システム", `音声認識でエラーが発生しました(${event.error})。`);
+    });
+
+    micButton.addEventListener("click", () => {
+        if (isListening) {
+            recognition.stop();
+        } else {
+            recognition.start();
+        }
+    });
+} else {
+    micButton.style.display = "none";
+}
+
+// ★音声出力(TTS)★ ブラウザ標準のspeechSynthesisを使う。
+// ON/OFFの状態はlocalStorageに保存し、リロードしても引き継ぐ
+const speakerToggle = document.getElementById("speaker-toggle");
+let speechEnabled = localStorage.getItem("falcon-speech-enabled") !== "false"; // 未設定ならON
+
+function updateSpeakerIcon() {
+    speakerToggle.textContent = speechEnabled ? "\u{1F50A}" : "\u{1F507}";
+}
+updateSpeakerIcon();
+
+speakerToggle.addEventListener("click", () => {
+    speechEnabled = !speechEnabled;
+    localStorage.setItem("falcon-speech-enabled", speechEnabled);
+    updateSpeakerIcon();
+    if (!speechEnabled) speechSynthesis.cancel();
+});
+
+document.getElementById("reload-button").addEventListener("click", () => {
+    location.reload();
+});
+
+
+let japaneseVoice = null;
+function loadJapaneseVoice() {
+    japaneseVoice = speechSynthesis.getVoices().find((v) => v.lang === "ja-JP") || null;
+}
+
+if ("speechSynthesis" in window) {
+    loadJapaneseVoice();
+    speechSynthesis.addEventListener("voiceschanged", loadJapaneseVoice);
+}
+
+function stripMarkdownForSpeech(text) {
+    return text
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/`(.*?)`/g, "$1")
+        .replace(/^[-*]\s+/gm, "")
+        .replace(/\|/g, " ")
+        .replace(/^#+\s*/gm, "");
+}
+
+// ★連続音声会話★ 音声入力で話しかけた時だけ、FALCONの返事が終わったら自動でマイクを再開する。
+// テキストで打った時は再開しない(タイプ入力のつもりで急にマイクが起動すると驚くため)
+function speak(text, { continueListening = false } = {}) {
+    const canContinue = continueListening && recognition && !isListening;
+
+    if (!speechEnabled || !("speechSynthesis" in window)) {
+        // 読み上げがOFFだと「喋り終わった」の合図が無いので、すぐにマイクを再開する
+        if (canContinue) recognition.start();
+        return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(stripMarkdownForSpeech(text));
+    if (japaneseVoice) utterance.voice = japaneseVoice;
+    utterance.lang = "ja-JP";
+
+    if (canContinue) {
+        utterance.addEventListener("end", () => recognition.start());
+    }
+
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utterance);
+}
 
 // CPU/MEM/NETバーを2秒おきに更新する(モバイル幅では非表示だが、裏では動き続けても実害はない)
 async function updateStats() {
