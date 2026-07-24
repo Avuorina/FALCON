@@ -11,6 +11,7 @@ from claude_agent_sdk import ClaudeSDKClient
 
 from core.brain import FALCON_OPTIONS, ask_claude
 from core.tools.system_stats import get_system_stats
+from core.tools import minecraft
 
 falcon_client: ClaudeSDKClient | None = None
 chat_history: list[dict] = []
@@ -48,6 +49,16 @@ async def get_history():
 @app.get("/system-stats")
 async def system_stats():
     return get_system_stats()
+
+
+@app.get("/minecraft/servers")
+async def minecraft_servers():
+    return minecraft.list_servers()
+
+
+@app.get("/minecraft/{server}/log")
+async def minecraft_log(server: str, lines: int = 100):
+    return minecraft.get_log_tail(server, lines)
 
 
 class ChatRequest(BaseModel):
