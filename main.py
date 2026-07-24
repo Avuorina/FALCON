@@ -20,8 +20,10 @@ async def main():
                 break
 
             # client を毎回「渡す」。作らない。同じ相手と喋り続ける
-            reply = await ask_claude(client, user_input)
+            reply, actions = await ask_claude(client, user_input)
             print(f"FALCON: {reply}")
+            for action in actions:
+                print(f"[ACTION] {action['url']} (コンソール版では自動で開けません。手動でこのURLを開いてください)")
 
     # ここ(with を抜けた瞬間)で自動的に disconnect される。
     # 「終了」で break した後、切断処理をおいらが書かなくていいのはそのためだぜ

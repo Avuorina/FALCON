@@ -407,6 +407,11 @@ form.addEventListener("submit", async (event) => {
         const data = await response.json();
         addMessage("FALCON", data.reply);
         speak(data.reply, { continueListening: wasVoice });
+
+        // set_alarmが呼ばれた時だけ、ショートカットのURLをこの場で開く
+        if (data.alarm_url) {
+            window.location.href = data.alarm_url;
+        }
     } catch (error) {
         addMessage("システム", "FALCONに接続できませんでした。Wi-Fiやサーバーの状態を確認してください。");
     } finally {

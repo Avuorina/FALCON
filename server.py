@@ -56,6 +56,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    alarm_url: str | None = None  # set_alarmが呼ばれた時だけ値が入る
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -65,8 +66,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     chat_history.append({"sender": "隼", "text": request.message})
 
-    reply = await ask_claude(falcon_client, request.message)
+    reply, actions = await ask_claude(falcon_client, request.message)
 
     chat_history.append({"sender": "FALCON", "text": reply})
 
-    return ChatResponse(reply=reply)
+    # 今のところ1ターンに複数アラームが同時に来るケースは想定しない(先頭だけ使う)
+    alarm_url = actions[0]["url"] if actions else None
+
+    return ChatResponse(reply=reply, alarm_url=alarm_url)

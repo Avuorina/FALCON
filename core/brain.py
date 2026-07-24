@@ -18,8 +18,10 @@ from core.tools.memo import save_memo, list_memos, search_memos, read_memo, MEMO
 from core.tools.gcal import list_events, create_event
 from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
 from core.tools.power import set_power_plan, get_power_plan
+from core.tools.alarm import build_alarm_url
 
 from datetime import datetime
+from claude_agent_sdk import AssistantMessage, ToolUseBlock
 
 # _test() が流す会話シナリオ。ここに1行足すだけで新しいシナリオを追加できる
 SCENARIOS = {
@@ -45,22 +47,42 @@ SCENARIOS = {
         "省電力にして",
         "普段通りに戻して",
     ],
+    "alarm": [
+        "19時30分にアラームをセットして",
+    ],
 }
 
 
-async def ask_claude(client: ClaudeSDKClient, user_message: str, debug: bool = False) -> str:
+async def ask_claude(client: ClaudeSDKClient, user_message: str, debug: bool = False) -> tuple[str, list[dict]]:
+    """
+    テキストの返事に加えて、実行すべき「アクション」も一緒に返す。
+
+    アクションは今のところ set_alarm のみ。アラームのURLはサーバー側では開けず、
+    iPhone側のブラウザでしか開けないため、テキストとは別チャンネルで
+    呼び出し側(server.py / main.py)に渡す設計にしてある。
+    """
     today_str = datetime.now().strftime("%Y年%m月%d日(%a)")
     message_with_date = f"[今日の日付: {today_str}]\n{user_message}"
 
     await client.query(message_with_date)
 
     answer = ""
+    actions: list[dict] = []
     async for message in client.receive_response():
         if debug:
             print(f"[DEBUG] {type(message).__name__}: {message}")
+
+        # set_alarmが呼ばれた瞬間を捕まえて、URLを組み立てておく
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, ToolUseBlock) and block.name == "mcp__falcon__set_alarm":
+                    alarm_time = block.input.get("time", "")
+                    actions.append(build_alarm_url(alarm_time))
+
         if isinstance(message, ResultMessage) and message.result:
             answer = message.result
-    return answer
+
+    return answer, actions
 
 SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)専用のAIアシスタントです。
 
@@ -143,6 +165,15 @@ SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)�
 - 可逆的で実害の無い操作なので、delete_task 等と違い確認なしで即実行してよい。
 - 「今どのプラン?」と聞かれたら get_power_plan で確認してから答える。
   記憶だけで答えない(前回切り替えてから隼が手動で変えている可能性がある)。
+
+## アラーム機能
+
+- 「〜時にアラームセットして」「〜時に起こして」など、時刻が明確な依頼の時に set_alarm を呼ぶ。
+- time は "HH:MM" 形式(24時間表記)で渡す。「7時半」なら "07:30"。
+- set_alarm はURLを組み立てるだけで、実際にアラームをセットするのは隼のiPhone側の処理になる。
+  そのため、呼んだ後は「アラームをセットしました」ではなく「アラームをセットする画面を開きます」
+  のように、一呼吸ある操作であることが伝わる言い方にする。
+- 時刻が曖昧(「あとで」「そのうち」等)なら、確認してから呼ぶ。
 """
 
 
@@ -247,6 +278,12 @@ async def get_power_plan_tool(args):
     result = get_power_plan()
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
 
+
+@tool("set_alarm", "指定した時刻(HH:MM形式)でiPhoneにアラームをセットする", {"time": str})
+async def set_alarm_tool(args):
+    result = build_alarm_url(args.get("time", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
 falcon_tools = create_sdk_mcp_server(
     name="falcon_tools",
     version="1.0.0",
@@ -255,6 +292,7 @@ falcon_tools = create_sdk_mcp_server(
         list_events_tool, create_event_tool,
         add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool,
         set_power_plan_tool, get_power_plan_tool,
+        set_alarm_tool,
     ],
 )
 
@@ -289,6 +327,7 @@ FALCON_OPTIONS = ClaudeAgentOptions(
         "mcp__falcon__delete_task",
         "mcp__falcon__set_power_plan",
         "mcp__falcon__get_power_plan",
+        "mcp__falcon__set_alarm",
     ],
 
     setting_sources=[],
@@ -322,7 +361,10 @@ async def _test(scenario: str = "task", debug: bool = False):
 
     async with ClaudeSDKClient(options=FALCON_OPTIONS) as client:
         for i, msg in enumerate(messages, start=1):
-            print(f"{i}: {await ask_claude(client, msg, debug=debug)}")
+            reply, actions = await ask_claude(client, msg, debug=debug)
+            print(f"{i}: {reply}")
+            for action in actions:
+                print(f"   [ACTION] {action['url']}")
 
     # ★後片付け★ このテストで新規に増えた分だけ直接削除する(会話を介さない)
     if scenario == "task":
