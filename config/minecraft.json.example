@@ -1,0 +1,7 @@
+{
+  "servers": {
+    "example_name": {
+      "server_dir": "C:\\path\\to\\your\\server"
+    }
+  }
+}

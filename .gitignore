@@ -230,3 +230,5 @@ config/google_token.json
 
 # tasks
 tasks/
+
+config/minecraft.json
