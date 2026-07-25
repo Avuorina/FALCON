@@ -6,3 +6,5 @@ google-api-python-client
 google-auth
 fastapi
 uvicorn
+discord.py
+python-dotenv
