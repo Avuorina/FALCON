@@ -3,6 +3,7 @@ import asyncio
 from claude_agent_sdk import ClaudeSDKClient
 
 from core.brain import FALCON_OPTIONS, ask_claude
+from core.tools.memory import clear_short_term
 
 
 class FalconSession:
@@ -23,6 +24,8 @@ class FalconSession:
 
     async def start(self) -> None:
         """クライアントを1個作って接続する。プロセス起動時に1回だけ呼ぶ。"""
+        # 前回の会話の短期記憶は持ち越さない。ここが「今回の会話」の起点になる
+        clear_short_term()
         self._client = ClaudeSDKClient(options=FALCON_OPTIONS)
         await self._client.connect()
 

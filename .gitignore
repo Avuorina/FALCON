@@ -232,3 +232,6 @@ config/google_token.json
 tasks/
 
 config/minecraft.json
+
+# memory
+memory/
