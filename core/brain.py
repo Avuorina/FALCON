@@ -19,6 +19,7 @@ from core.tools.gcal import list_events, create_event
 from core.tools.tasks import add_task, list_tasks, complete_task, delete_task
 from core.tools.power import set_power_plan, get_power_plan
 from core.tools.alarm import build_alarm_url
+from core.tools.memory import remember, recall, forget, build_context_block
 
 from datetime import datetime
 from claude_agent_sdk import AssistantMessage, ToolUseBlock
@@ -62,9 +63,11 @@ async def ask_claude(client: ClaudeSDKClient, user_message: str, debug: bool = F
     呼び出し側(server.py / main.py)に渡す設計にしてある。
     """
     today_str = datetime.now().strftime("%Y年%m月%d日(%a)")
-    message_with_date = f"[今日の日付: {today_str}]\n{user_message}"
+    # 毎ターン、記憶(長期は常時・プロジェクトは話題一致時)を先頭に差し込む
+    memory_block = build_context_block(user_message)
+    message_with_context = f"{memory_block}[今日の日付: {today_str}]\n{user_message}"
 
-    await client.query(message_with_date)
+    await client.query(message_with_context)
 
     answer = ""
     actions: list[dict] = []
@@ -174,6 +177,27 @@ SYSTEM_PROMPT = """あなたは「FALCON」という名前の、隼(はやと)�
   そのため、呼んだ後は「アラームをセットしました」ではなく「アラームをセットする画面を開きます」
   のように、一呼吸ある操作であることが伝わる言い方にする。
 - 時刻が曖昧(「あとで」「そのうち」等)なら、確認してから呼ぶ。
+
+## スマートメモリ(記憶)
+
+記憶は3層ある。
+- 短期記憶(tier="short"): 今回の会話の間だけ意識しておきたい事実。長期に残すほどではないもの。セッション再起動で消える。会話の大半は会話履歴で覚えているので、shortは控えめに使う。
+- 長期記憶(tier=\"long\"): 隼について長く役立つ一般的な事実。
+- プロジェクト記憶(tier=\"project\"): 特定プロジェクト(FALCON開発、ゲーム制作、ExcelDestroyer等)に固有の事実。project名を必ず付ける。
+
+### 覚えるとき(remember)
+- 会話中に隼についての持続的な事実に気づいたら remember を呼ぶ。例: 好み、よく使う道具、運営・開発中のもの、習慣、立場。
+- 保存は黙って行う。「覚えました」等を返事に付けない。会話は普通に続ける。
+- 特定プロジェクトに紐づく事実は tier=\"project\" と project 名で保存する。どのプロジェクトかは話の流れから判断する。
+- 覚えないもの: その場限りの話、一時的な気分、推測、既に会話文脈で足りること。確実な事実だけを残す。
+
+### 思い出すとき
+- メッセージ先頭に [記憶] ブロックが付くことがある。そこに書かれた事実は既に知っていることとして扱う。
+- [記憶] に既にある事実を、remember で保存し直さない(重複になる)。
+- 「何を覚えてる?」等、過去の記憶を問われたら recall で確認してから答える。憶測で答えない。
+
+### 消すとき
+- forget は取り消せない。実行前に必ず確認を取る。
 """
 
 
@@ -284,6 +308,32 @@ async def set_alarm_tool(args):
     result = build_alarm_url(args.get("time", ""))
     return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
 
+@tool(
+    "remember",
+    "隼についての事実を記憶する。tier='long'(長期の一般的な事実)/'project'(特定プロジェクト、project名必須)/'short'(今回の会話の間だけ)",
+    {"text": str, "tier": str, "project": str},
+)
+async def remember_tool(args):
+    result = remember(args.get("text", ""), args.get("tier", "long"), args.get("project") or None)
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool(
+    "recall",
+    "記憶を検索して取り出す。keywordは空白区切りのAND検索。projectを渡すとそのプロジェクト記憶も対象に含める",
+    {"keyword": str, "project": str},
+)
+async def recall_tool(args):
+    result = recall(args.get("keyword", ""), args.get("project") or None)
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
+@tool("forget", "指定したidの記憶を削除する。取り消せないので実行前に確認すること", {"fact_id": str})
+async def forget_tool(args):
+    result = forget(args.get("fact_id", ""))
+    return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}
+
+
 falcon_tools = create_sdk_mcp_server(
     name="falcon_tools",
     version="1.0.0",
@@ -293,6 +343,7 @@ falcon_tools = create_sdk_mcp_server(
         add_task_tool, list_tasks_tool, complete_task_tool, delete_task_tool,
         set_power_plan_tool, get_power_plan_tool,
         set_alarm_tool,
+        remember_tool, recall_tool, forget_tool,
     ],
 )
 
@@ -328,6 +379,9 @@ FALCON_OPTIONS = ClaudeAgentOptions(
         "mcp__falcon__set_power_plan",
         "mcp__falcon__get_power_plan",
         "mcp__falcon__set_alarm",
+        "mcp__falcon__remember",
+        "mcp__falcon__recall",
+        "mcp__falcon__forget",
     ],
 
     setting_sources=[],
