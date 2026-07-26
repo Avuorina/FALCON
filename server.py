@@ -1,7 +1,9 @@
+import os
+import signal
 from contextlib import asynccontextmanager
 
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 # pyrefly: ignore [missing-import]
 from fastapi.staticfiles import StaticFiles
 # pyrefly: ignore [missing-import]
@@ -85,3 +87,19 @@ async def chat(request: ChatRequest) -> ChatResponse:
     alarm_url = actions[0]["url"] if actions else None
 
     return ChatResponse(reply=reply, alarm_url=alarm_url)
+
+
+def _send_shutdown_signal():
+    # レスポンスを返し終えた後にSIGINTを自プロセスへ送る。
+    # uvicornはSIGINTを受け取るとlifespanのシャットダウン処理(falcon_clientのclose等)を
+    # ちゃんと通してから終了するので、Dashboardの「サーバー停止」ボタンから
+    # 行儀よく止められる(Ctrl+Cで止めているのと同じ経路)。
+    os.kill(os.getpid(), signal.SIGINT)
+
+
+@app.post("/shutdown")
+async def shutdown(background_tasks: BackgroundTasks):
+    # ここで即座にkillすると、このレスポンス自体がDashboard側に届かず
+    # 接続エラー扱いになってしまうため、レスポンス送信後に実行されるbackground_tasksに乗せる
+    background_tasks.add_task(_send_shutdown_signal)
+    return {"status": "shutting down"}
