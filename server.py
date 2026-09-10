@@ -9,23 +9,25 @@ from fastapi.staticfiles import StaticFiles
 # pyrefly: ignore [missing-import]
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from claude_agent_sdk import ClaudeSDKClient
 
-from core.brain import FALCON_OPTIONS, ask_claude
+from core.session import FalconSession
 from core.tools.system_stats import get_system_stats
 from core.tools import minecraft
 
-falcon_client: ClaudeSDKClient | None = None
-chat_history: list[dict] = []
+# ★共有の肝★ サーバー(PWA)と Discord Bot が1個の会話セッションを共有するための器。
+# run.py が `from server import app, session` でこの実体を受け取り、Bot に渡す。
+session = FalconSession()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global falcon_client
-    async with ClaudeSDKClient(options=FALCON_OPTIONS) as client:
-        falcon_client = client
+    # サーバーの生存期間 = 会話セッションの寿命。起動時に1回だけ接続し、終了時に切る。
+    # (main.py で「async with を while の外に置く」とした原則を、サーバー全体に広げた形)
+    await session.start()
+    try:
         yield
-    falcon_client = None
+    finally:
+        await session.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -43,9 +45,10 @@ async def service_worker():
     # ページ本体(/)へのアクセスを横取りできなくなるため、ルートから直接配信する
     return FileResponse("static/sw.js", media_type="application/javascript")
 
+
 @app.get("/history")
 async def get_history():
-    return {"history": chat_history}
+    return {"history": session.history}
 
 
 @app.get("/system-stats")
@@ -74,14 +77,8 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    if falcon_client is None:
-        return ChatResponse(reply="FALCONが起動していません。少々お待ちください。")
-
-    chat_history.append({"sender": "隼", "text": request.message})
-
-    reply, actions = await ask_claude(falcon_client, request.message)
-
-    chat_history.append({"sender": "FALCON", "text": reply})
+    # session.ask が履歴への追記(隼 / FALCON 両方)と _lock による直列化を引き受ける。
+    reply, actions = await session.ask("隼", request.message)
 
     # 今のところ1ターンに複数アラームが同時に来るケースは想定しない(先頭だけ使う)
     alarm_url = actions[0]["url"] if actions else None
@@ -91,7 +88,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 def _send_shutdown_signal():
     # レスポンスを返し終えた後にSIGINTを自プロセスへ送る。
-    # uvicornはSIGINTを受け取るとlifespanのシャットダウン処理(falcon_clientのclose等)を
+    # uvicornはSIGINTを受け取るとlifespanのシャットダウン処理(session.stop()等)を
     # ちゃんと通してから終了するので、Dashboardの「サーバー停止」ボタンから
     # 行儀よく止められる(Ctrl+Cで止めているのと同じ経路)。
     os.kill(os.getpid(), signal.SIGINT)
