@@ -235,3 +235,6 @@ config/minecraft.json
 
 # memory
 memory/
+
+# Claude Code 開発ガイド(個人用)
+CLAUDE.md
